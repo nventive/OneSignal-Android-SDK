@@ -143,24 +143,6 @@ public class OneSignal {
       void tagsAvailable(JSONObject tags);
    }
 
-   public interface ChangeTagsUpdateHandler {
-      void onSuccess(JSONObject tags);
-      void onFailure(SendTagsError error);
-   }
-
-   public static class SendTagsError {
-      private String message;
-      private int code;
-
-      SendTagsError(int errorCode, String errorMessage) {
-         this.message = errorMessage;
-         this.code = errorCode;
-      }
-
-      public int getCode() { return code; }
-      public String getMessage() { return message; }
-   }
-
 
    public enum EmailErrorType {
       VALIDATION, REQUIRES_EMAIL_AUTH, INVALID_OPERATION, NETWORK
@@ -361,7 +343,7 @@ public class OneSignal {
    private static TrackAmazonPurchase trackAmazonPurchase;
    private static TrackFirebaseAnalytics trackFirebaseAnalytics;
 
-   public static final String VERSION = "031006";
+   public static final String VERSION = "030902";
 
    private static AdvertisingIdentifierProvider mainAdIdProvider = new AdvertisingIdProviderGPS();
 
@@ -382,7 +364,7 @@ public class OneSignal {
    private static Collection<JSONArray> unprocessedOpenedNotifis = new ArrayList<>();
    private static HashSet<String> postedOpenedNotifIds = new HashSet<>();
 
-   private static ArrayList<GetTagsHandler> pendingGetTagsHandlers = new ArrayList<>();
+   private static GetTagsHandler pendingGetTagsHandler;
    private static boolean getTagsCall;
 
    private static boolean waitingToPostStateSync;
@@ -514,21 +496,9 @@ public class OneSignal {
       return mInitBuilder;
    }
 
-   // Sets the global shared ApplicationContext for OneSignal
-   // This is set from all OneSignal entry points
-   //   - BroadcastReceivers, Services, and Activities
-   public static void setAppContext(@NonNull Context context) {
-      if (context == null) {
-         Log(LOG_LEVEL.WARN, "setAppContext(null) is not valid, ignoring!");
-         return;
-      }
-
-      boolean wasAppContextNull = (appContext == null);
+   static void setAppContext(Context context) {
       appContext = context.getApplicationContext();
-
-      // Prefs require a context to save, kick off write in-case it was waiting.
-      if (wasAppContextNull)
-         OneSignalPrefs.startDelayedWrite();
+      OneSignalPrefs.startDelayedWrite();
    }
 
    /**
@@ -899,13 +869,6 @@ public class OneSignal {
 
       unprocessedOpenedNotifis.clear();
    }
-   /**
-    * Please do not use this method for logging, it is meant solely to be
-    * used by our wrapper SDK's.
-    */
-   public static void onesignalLog(LOG_LEVEL level, String message) {
-      OneSignal.Log(level, message);
-   }
 
    public static boolean userProvidedPrivacyConsent() {
       return getSavedUserConsentStatus();
@@ -929,14 +892,6 @@ public class OneSignal {
       }
 
       requiresUserPrivacyConsent = required;
-   }
-
-
-   /**
-    * Indicates if the SDK is still waiting for the user to provide consent
-    */
-   public static boolean requiresUserPrivacyConsent() {
-      return requiresUserPrivacyConsent && !userProvidedPrivacyConsent();
    }
 
    static boolean shouldLogUserPrivacyConsentErrorMessageForMethodName(String methodName) {
@@ -1419,41 +1374,6 @@ public class OneSignal {
       emailLogout.run();
    }
 
-   public static void setExternalUserId(final String externalId) {
-
-      if (shouldLogUserPrivacyConsentErrorMessageForMethodName("setExternalId()"))
-         return;
-
-      Runnable runSetExternalUserId = new Runnable() {
-         @Override
-         public void run() {
-            try {
-               OneSignalStateSynchronizer.setExternalUserId(externalId);
-            } catch (JSONException exception) {
-               String operation = externalId == "" ? "remove" : "set";
-               onesignalLog(LOG_LEVEL.ERROR, "Attempted to " + operation + " external ID but encountered a JSON exception");
-               exception.printStackTrace();
-            }
-         }
-      };
-
-      // If either the app context is null or the waiting queue isn't done (to preserve operation order)
-      if (appContext == null || shouldRunTaskThroughQueue()) {
-         addTaskToQueue(new PendingTaskRunnable(runSetExternalUserId));
-         return;
-      }
-
-      runSetExternalUserId.run();
-   }
-
-   public static void removeExternalUserId() {
-      if (shouldLogUserPrivacyConsentErrorMessageForMethodName("removeExternalUserId()"))
-         return;
-
-      // to remove the external user ID, the API requires an empty string
-      setExternalUserId("");
-   }
-
    /**
     * Tag a user based on an app event of your choosing so later you can create
     * <a href="https://documentation.onesignal.com/docs/segmentation">OneSignal Segments</a>
@@ -1494,24 +1414,6 @@ public class OneSignal {
     *
     */
    public static void sendTags(final JSONObject keyValues) {
-      sendTags(keyValues, null);
-   }
-
-   /**
-    * Tag a user based on an app event of your choosing so later you can create
-    * <a href="https://documentation.onesignal.com/docs/segmentation">OneSignal Segments</a>
-    *  to target these users.
-    *
-    *  NOTE: The ChangeTagsUpdateHandler will not be called under all circumstances. It can also take
-    *  more than 5 seconds in some cases to be called, so please do not block any user action
-    *  based on this callback.
-    * @param keyValues Key value pairs of your choosing to create or update. <b>Note:</b>
-    *                  Passing in a blank String as a value deletes a key.
-    *                  You can also call {@link #deleteTag(String)} or {@link #deleteTags(String)}.
-    *
-    */
-   public static void sendTags(final JSONObject keyValues, ChangeTagsUpdateHandler handler) {
-      final ChangeTagsUpdateHandler tagsHandler = handler;
 
       //if applicable, check if the user provided privacy consent
       if (shouldLogUserPrivacyConsentErrorMessageForMethodName("sendTags()"))
@@ -1520,13 +1422,10 @@ public class OneSignal {
       Runnable sendTagsRunnable = new Runnable() {
          @Override
          public void run() {
-            if (keyValues == null) {
-               if (tagsHandler != null)
-                  tagsHandler.onFailure(new SendTagsError(-1, "Attempted to send null tags"));
-               return;
-            }
+            if (keyValues == null) return;
 
             JSONObject existingKeys = OneSignalStateSynchronizer.getTags(false).result;
+
             JSONObject toSend = new JSONObject();
 
             Iterator<String> keys = keyValues.keys();
@@ -1549,11 +1448,8 @@ public class OneSignal {
                catch (Throwable t) {}
             }
 
-            if (!toSend.toString().equals("{}")) {
-               OneSignalStateSynchronizer.sendTags(toSend, tagsHandler);
-            } else if (tagsHandler != null) {
-               tagsHandler.onSuccess(existingKeys);
-            }
+            if (!toSend.toString().equals("{}"))
+               OneSignalStateSynchronizer.sendTags(toSend);
          }
       };
 
@@ -1561,9 +1457,6 @@ public class OneSignal {
       if (appContext == null || shouldRunTaskThroughQueue()) {
          Log(LOG_LEVEL.ERROR, "You must initialize OneSignal before modifying tags!" +
                  "Moving this operation to a pending task queue.");
-         if (tagsHandler != null)
-            tagsHandler.onFailure(new SendTagsError(-1, "You must initialize OneSignal before modifying tags!" +
-                    "Moving this operation to a pending task queue."));
          addTaskToQueue(new PendingTaskRunnable(sendTagsRunnable));
          return;
       }
@@ -1661,13 +1554,7 @@ public class OneSignal {
       if (shouldLogUserPrivacyConsentErrorMessageForMethodName("getTags()"))
          return;
 
-      synchronized (pendingGetTagsHandlers) {
-         pendingGetTagsHandlers.add(getTagsHandler);
-
-         // if there is an existing in-flight request, we should return
-         // since there's no point in making a duplicate runnable
-         if (pendingGetTagsHandlers.size() > 1) return;
-      }
+      pendingGetTagsHandler = getTagsHandler;
 
       Runnable getTagsRunnable = new Runnable() {
          @Override
@@ -1680,8 +1567,7 @@ public class OneSignal {
             if (getUserId() == null) {
                return;
             }
-
-            internalFireGetTagsCallbacks();
+            internalFireGetTagsCallback(pendingGetTagsHandler);
          }
       };
 
@@ -1695,27 +1581,18 @@ public class OneSignal {
       getTagsRunnable.run();
    }
 
-   private static void internalFireGetTagsCallbacks() {
-      synchronized (pendingGetTagsHandlers) {
-         if (pendingGetTagsHandlers.size() == 0) return;
-      }
+   private static void internalFireGetTagsCallback(final GetTagsHandler getTagsHandler) {
+      if (getTagsHandler == null) return;
 
       new Thread(new Runnable() {
          @Override
          public void run() {
             final UserStateSynchronizer.GetTagsResult tags = OneSignalStateSynchronizer.getTags(!getTagsCall);
             if (tags.serverSuccess) getTagsCall = true;
-
-            synchronized (pendingGetTagsHandlers) {
-               for (GetTagsHandler handler : pendingGetTagsHandlers) {
-                  if (tags.result == null || tags.toString().equals("{}"))
-                     handler.tagsAvailable(null);
-                  else
-                     handler.tagsAvailable(tags.result);
-               }
-
-               pendingGetTagsHandlers.clear();
-            }
+            if (tags.result == null || tags.toString().equals("{}"))
+               getTagsHandler.tagsAvailable(null);
+            else
+               getTagsHandler.tagsAvailable(tags.result);
          }
       }, "OS_GETTAGS_CALLBACK").start();
    }
@@ -1727,17 +1604,14 @@ public class OneSignal {
     * @param key Key to remove.
     */
    public static void deleteTag(String key) {
-      deleteTag(key, null);
-   }
 
-   public static void deleteTag(String key, ChangeTagsUpdateHandler handler) {
       //if applicable, check if the user provided privacy consent
       if (shouldLogUserPrivacyConsentErrorMessageForMethodName("deleteTag()"))
          return;
 
       Collection<String> tempList = new ArrayList<>(1);
       tempList.add(key);
-      deleteTags(tempList, handler);
+      deleteTags(tempList);
    }
 
    /**
@@ -1746,10 +1620,7 @@ public class OneSignal {
     * @param keys Keys to remove.
     */
    public static void deleteTags(Collection<String> keys) {
-      deleteTags(keys, null);
-   }
 
-   public static void deleteTags(Collection<String> keys, ChangeTagsUpdateHandler handler) {
       //if applicable, check if the user provided privacy consent
       if (shouldLogUserPrivacyConsentErrorMessageForMethodName("deleteTags()"))
          return;
@@ -1759,17 +1630,14 @@ public class OneSignal {
          for (String key : keys)
             jsonTags.put(key, "");
 
-         sendTags(jsonTags, handler);
+         sendTags(jsonTags);
       } catch (Throwable t) {
          Log(LOG_LEVEL.ERROR, "Failed to generate JSON for deleteTags.", t);
       }
    }
 
    public static void deleteTags(String jsonArrayString) {
-      deleteTags(jsonArrayString, null);
-   }
 
-   public static void deleteTags(String jsonArrayString, ChangeTagsUpdateHandler handler) {
       //if applicable, check if the user provided privacy consent
       if (shouldLogUserPrivacyConsentErrorMessageForMethodName("deleteTags()"))
          return;
@@ -1781,7 +1649,7 @@ public class OneSignal {
          for (int i = 0; i < jsonArray.length(); i++)
             jsonTags.put(jsonArray.getString(i), "");
 
-         sendTags(jsonTags, handler);
+         sendTags(jsonTags);
       } catch (Throwable t) {
          Log(LOG_LEVEL.ERROR, "Failed to generate JSON for deleteTags.", t);
       }
@@ -2080,12 +1948,19 @@ public class OneSignal {
               OneSignalPrefs.PREFS_GT_APP_ID,null);
    }
 
-   static boolean getSavedUserConsentStatus() {
+   static boolean getSavedUserConsentStatus() { return getSavedUserConsentStatus(appContext); }
+
+   private static boolean getSavedUserConsentStatus(Context inContext) {
+      if (inContext == null)
+         return false;
+
       return OneSignalPrefs.getBool(OneSignalPrefs.PREFS_ONESIGNAL, OneSignalPrefs.PREFS_ONESIGNAL_USER_PROVIDED_CONSENT, false);
    }
 
    static void saveUserConsentStatus(boolean consent) {
-      
+      if (appContext == null)
+         return;
+
       OneSignalPrefs.saveBool(OneSignalPrefs.PREFS_ONESIGNAL, OneSignalPrefs.PREFS_ONESIGNAL_USER_PROVIDED_CONSENT, consent);
    }
 
@@ -2151,7 +2026,7 @@ public class OneSignal {
    static void updateUserIdDependents(String userId) {
       saveUserId(userId);
       fireIdsAvailableCallback();
-      internalFireGetTagsCallbacks();
+      internalFireGetTagsCallback(pendingGetTagsHandler);
    
       getCurrentSubscriptionState(appContext).setUserId(userId);
       
@@ -2253,10 +2128,6 @@ public class OneSignal {
    }
    public static void setInFocusDisplaying(int displayOption) {
       setInFocusDisplaying(getInFocusDisplaying(displayOption));
-   }
-
-   public static OSInFocusDisplayOption currentInFocusDisplayOption() {
-      return getCurrentOrNewInitBuilder().mDisplayOption;
    }
 
    private static OSInFocusDisplayOption getInFocusDisplaying(int displayOption) {
@@ -2390,6 +2261,11 @@ public class OneSignal {
     * your app is restarted.
     */
    public static void clearOneSignalNotifications() {
+
+      //if applicable, check if the user provided privacy consent
+      if (shouldLogUserPrivacyConsentErrorMessageForMethodName("clearOneSignalNotifications()"))
+         return;
+
       Runnable runClearOneSignalNotifications = new Runnable() {
          @Override
          public void run() {
@@ -2472,6 +2348,11 @@ public class OneSignal {
     * @param id
     */
    public static void cancelNotification(final int id) {
+
+      //if applicable, check if the user provided privacy consent
+      if (shouldLogUserPrivacyConsentErrorMessageForMethodName("cancelNotification()"))
+         return;
+
       Runnable runCancelNotification = new Runnable() {
          @Override
          public void run() {
@@ -2506,9 +2387,6 @@ public class OneSignal {
                   }
                }
             }
-
-            NotificationManager notificationManager = (NotificationManager)appContext.getSystemService(Context.NOTIFICATION_SERVICE);
-            notificationManager.cancel(id);
          }
       };
 
@@ -2522,6 +2400,9 @@ public class OneSignal {
       }
 
       runCancelNotification.run();
+
+      NotificationManager notificationManager = (NotificationManager)appContext.getSystemService(Context.NOTIFICATION_SERVICE);
+      notificationManager.cancel(id);
    }
    
    
@@ -2637,6 +2518,10 @@ public class OneSignal {
     */
    public static void addPermissionObserver(OSPermissionObserver observer) {
 
+      //if applicable, check if the user provided privacy consent
+      if (shouldLogUserPrivacyConsentErrorMessageForMethodName("addPermissionObserver()"))
+         return;
+
       if (appContext == null) {
          Log(LOG_LEVEL.ERROR, "OneSignal.init has not been called. Could not add permission observer");
          return;
@@ -2674,6 +2559,10 @@ public class OneSignal {
     */
    public static void addSubscriptionObserver(OSSubscriptionObserver observer) {
 
+      //if applicable, check if the user provided privacy consent
+      if (shouldLogUserPrivacyConsentErrorMessageForMethodName("addSubscriptionObserver()"))
+         return;
+
       if (appContext == null) {
          Log(LOG_LEVEL.ERROR, "OneSignal.init has not been called. Could not add subscription observer");
          return;
@@ -2707,6 +2596,10 @@ public class OneSignal {
     * @param observer the instance of {@link OSSubscriptionObserver} that acts as the observer
     */
    public static void addEmailSubscriptionObserver(@NonNull OSEmailSubscriptionObserver observer) {
+
+      //if applicable, check if the user provided privacy consent
+      if (shouldLogUserPrivacyConsentErrorMessageForMethodName("addEmailSubscriptionObserver()"))
+         return;
 
       if (appContext == null) {
          Log(LOG_LEVEL.ERROR, "OneSignal.init has not been called. Could not add email subscription observer");

@@ -113,7 +113,7 @@ class OneSignalPrefs {
         }
 
         private void flushBufferToDisk() {
-            // A flush will be triggered later once a context is set via OneSignal.setAppContext(...)
+            // A flush will be triggered later once a context via OneSignal.setAppContext(...)
             if (OneSignal.appContext == null)
                 return;
 
@@ -227,11 +227,8 @@ class OneSignalPrefs {
     }
 
     private static synchronized SharedPreferences getSharedPrefsByName(String prefsName) {
-        if (OneSignal.appContext == null) {
-            String msg = "OneSignal.appContext null, could not read " + prefsName + " from getSharedPreferences.";
-            OneSignal.Log(OneSignal.LOG_LEVEL.WARN, msg, new Throwable());
+        if (OneSignal.appContext == null)
             return null;
-        }
 
         return OneSignal.appContext.getSharedPreferences(prefsName, Context.MODE_PRIVATE);
     }
