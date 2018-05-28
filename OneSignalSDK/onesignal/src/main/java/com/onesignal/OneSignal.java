@@ -2231,8 +2231,16 @@ public class OneSignal {
                   if (shouldLogUserPrivacyConsentErrorMessageForMethodName("promptLocation()"))
                      return;
 
-                  if (point != null)
-                     OneSignalStateSynchronizer.updateLocation(point);
+                 if (point != null) {
+                     try {
+                        OneSignalStateSynchronizer.updateLocation(point);
+                        OneSignal.sendTags(new JSONObject()
+                                .put("lat", point.lat)
+                                .put("long", point.log));
+                     } catch (JSONException e) {
+                        e.printStackTrace();
+                     }
+                  }
                }
             };
 
