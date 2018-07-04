@@ -181,25 +181,27 @@ class LocationGMS {
          return;
 
       try {
-         startFallBackThread();
+         synchronized (syncLock) {
+            startFallBackThread();
 
-         if (locationHandlerThread == null)
-            locationHandlerThread = new LocationHandlerThread();
+            if (locationHandlerThread == null)
+               locationHandlerThread = new LocationHandlerThread();
 
-         if (mGoogleApiClient == null || mLastLocation == null) {
-            GoogleApiClientListener googleApiClientListener = new GoogleApiClientListener();
-            GoogleApiClient googleApiClient = new GoogleApiClient.Builder(classContext)
-                    .addApi(LocationServices.API)
-                    .addConnectionCallbacks(googleApiClientListener)
-                    .addOnConnectionFailedListener(googleApiClientListener)
-                    .setHandler(locationHandlerThread.mHandler)
-                    .build();
-            mGoogleApiClient = new GoogleApiClientCompatProxy(googleApiClient);
+            if (mGoogleApiClient == null || mLastLocation == null) {
+               GoogleApiClientListener googleApiClientListener = new GoogleApiClientListener();
+               GoogleApiClient googleApiClient = new GoogleApiClient.Builder(classContext)
+                       .addApi(LocationServices.API)
+                       .addConnectionCallbacks(googleApiClientListener)
+                       .addOnConnectionFailedListener(googleApiClientListener)
+                       .setHandler(locationHandlerThread.mHandler)
+                       .build();
+               mGoogleApiClient = new GoogleApiClientCompatProxy(googleApiClient);
 
-            mGoogleApiClient.connect();
+               mGoogleApiClient.connect();
+            }
+            else if (mLastLocation != null)
+               fireCompleteForLocation(mLastLocation);
          }
-         else if (mLastLocation != null)
-            fireCompleteForLocation(mLastLocation);
       } catch (Throwable t) {
          OneSignal.Log(OneSignal.LOG_LEVEL.WARN, "Location permission exists but there was an error initializing: ", t);
          fireFailedComplete();
@@ -335,7 +337,14 @@ class LocationGMS {
 
       private GoogleApiClient mGoogleApiClient;
 
+<<<<<<< HEAD
       // this initializer method is already synchronized from LocationGMS with respect to the GoogleApiClient lock
+=======
+<<<<<<< HEAD
+      // this initializer method is already synchronized from LocationGMS with respect to the GoogleApiClient lock
+=======
+>>>>>>> master
+>>>>>>> Dev/bgy/add latlong tags (#2)
       LocationUpdateListener(GoogleApiClient googleApiClient) {
          mGoogleApiClient = googleApiClient;
 
