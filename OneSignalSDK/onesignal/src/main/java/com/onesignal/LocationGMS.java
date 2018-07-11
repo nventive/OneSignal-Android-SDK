@@ -337,10 +337,7 @@ class LocationGMS {
 
       private GoogleApiClient mGoogleApiClient;
 
-<<<<<<< HEAD
       // this initializer method is already synchronized from LocationGMS with respect to the GoogleApiClient lock
-=======
->>>>>>> master
       LocationUpdateListener(GoogleApiClient googleApiClient) {
          mGoogleApiClient = googleApiClient;
 

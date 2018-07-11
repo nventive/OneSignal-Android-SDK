@@ -343,7 +343,7 @@ public class OneSignal {
    private static TrackAmazonPurchase trackAmazonPurchase;
    private static TrackFirebaseAnalytics trackFirebaseAnalytics;
 
-   public static final String VERSION = "030901";
+   public static final String VERSION = "030902";
 
    private static AdvertisingIdentifierProvider mainAdIdProvider = new AdvertisingIdProviderGPS();
 
@@ -496,6 +496,11 @@ public class OneSignal {
       return mInitBuilder;
    }
 
+   static void setAppContext(Context context) {
+      appContext = context.getApplicationContext();
+      OneSignalPrefs.startDelayedWrite();
+   }
+
    /**
     * Initializes OneSignal to register the device for push notifications.
     *<br/>
@@ -552,7 +557,7 @@ public class OneSignal {
    }
 
    public static void init(Context context, String googleProjectNumber, String oneSignalAppId, NotificationOpenedHandler notificationOpenedHandler, NotificationReceivedHandler notificationReceivedHandler) {
-      appContext = context.getApplicationContext();
+      OneSignal.setAppContext(context);
 
       if (requiresUserPrivacyConsent && !userProvidedPrivacyConsent()) {
          OneSignal.Log(LOG_LEVEL.VERBOSE, "OneSignal SDK initialization delayed, user privacy consent is set to required for this application.");
@@ -574,9 +579,6 @@ public class OneSignal {
          return;
 
       if (initDone) {
-         if (context != null)
-            appContext = context.getApplicationContext();
-
          if (mInitBuilder.mNotificationOpenedHandler != null)
             fireCallbackForOpenedNotifications();
 
@@ -587,7 +589,6 @@ public class OneSignal {
 
       foreground = contextIsActivity;
       appId = oneSignalAppId;
-      appContext = context.getApplicationContext();
    
       saveFilterOtherGCMReceivers(mInitBuilder.mFilterOtherGCMReceivers);
 
@@ -639,6 +640,8 @@ public class OneSignal {
 
       if (TrackFirebaseAnalytics.CanTrack())
          trackFirebaseAnalytics = new TrackFirebaseAnalytics(appContext);
+
+      PushRegistratorFCM.disableFirebaseInstanceIdService(appContext);
       
       initDone = true;
 
@@ -1683,7 +1686,7 @@ public class OneSignal {
       runIdsAvailable.run();
    }
 
-   private static void fireIdsAvailableCallback() {
+   static void fireIdsAvailableCallback() {
       if (idsAvailableHandler != null) {
          OSUtils.runOnMainUIThread(new Runnable() {
             @Override
@@ -2231,16 +2234,8 @@ public class OneSignal {
                   if (shouldLogUserPrivacyConsentErrorMessageForMethodName("promptLocation()"))
                      return;
 
-                 if (point != null) {
-                     try {
-                        OneSignalStateSynchronizer.updateLocation(point);
-                        OneSignal.sendTags(new JSONObject()
-                                .put("lat", point.lat)
-                                .put("long", point.log));
-                     } catch (JSONException e) {
-                        e.printStackTrace();
-                     }
-                  }
+                  if (point != null)
+                     OneSignalStateSynchronizer.updateLocation(point);
                }
             };
 
