@@ -336,15 +336,8 @@ class LocationGMS {
    static class LocationUpdateListener implements LocationListener {
 
       private GoogleApiClient mGoogleApiClient;
-
-<<<<<<< HEAD
+      
       // this initializer method is already synchronized from LocationGMS with respect to the GoogleApiClient lock
-=======
-<<<<<<< HEAD
-      // this initializer method is already synchronized from LocationGMS with respect to the GoogleApiClient lock
-=======
->>>>>>> master
->>>>>>> Dev/bgy/add latlong tags (#2)
       LocationUpdateListener(GoogleApiClient googleApiClient) {
          mGoogleApiClient = googleApiClient;
 
