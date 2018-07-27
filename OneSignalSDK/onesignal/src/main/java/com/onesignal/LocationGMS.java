@@ -48,6 +48,7 @@ import com.google.android.gms.location.LocationServices;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -142,6 +143,8 @@ class LocationGMS {
       if (android.os.Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
          if (locationFinePermission != PackageManager.PERMISSION_GRANTED && locationCoarsePermission != PackageManager.PERMISSION_GRANTED) {
             handler.complete(null);
+            // Clear existing location tags
+            OneSignal.deleteTags(new ArrayList<String>() {{ add("lat"); add("long"); }});
             return;
          }
 
@@ -229,6 +232,10 @@ class LocationGMS {
    }
 
    static void fireFailedComplete() {
+
+      // Clear existing location tags
+      OneSignal.deleteTags(new ArrayList<String>() {{ add("lat"); add("long"); }});
+
       PermissionsActivity.answered = false;
 
       synchronized (syncLock) {
