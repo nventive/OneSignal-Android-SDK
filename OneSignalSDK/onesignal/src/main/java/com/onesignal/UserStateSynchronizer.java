@@ -41,7 +41,7 @@ abstract class UserStateSynchronizer {
 
         Handler mHandler = null;
 
-        static final int MAX_RETRIES = 3, NETWORK_CALL_DELAY_TO_BUFFER_MS = 5_000;
+        static final int MAX_RETRIES = 3, NETWORK_CALL_DELAY_TO_BUFFER_MS = 1_000;
         int currentRetry;
 
         NetworkHandlerThread(int type) {
