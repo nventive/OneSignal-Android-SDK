@@ -2235,14 +2235,7 @@ public class OneSignal {
                      return;
 
                   if (point != null) {
-                     try {
-                        OneSignalStateSynchronizer.updateLocation(point);
-                        OneSignal.sendTags(new JSONObject()
-                                .put("lat", point.lat)
-                                .put("long", point.log));
-                     } catch (JSONException e) {
-                        e.printStackTrace();
-                     }
+                     OneSignalStateSynchronizer.updateLocation(point);
                   }
                }
             };

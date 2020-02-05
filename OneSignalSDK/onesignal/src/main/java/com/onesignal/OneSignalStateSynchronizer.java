@@ -115,6 +115,15 @@ class OneSignalStateSynchronizer {
    static void updateLocation(LocationGMS.LocationPoint point) {
       getPushStateSynchronizer().updateLocation(point);
       getEmailStateSynchronizer().updateLocation(point);
+
+      try {
+         sendTags(new JSONObject()
+           .put("lat", point.lat)
+           .put("long", point.log));
+      } catch (JSONException e) {
+         e.printStackTrace();
+      }
+      OneSignal.Log(OneSignal.LOG_LEVEL.INFO, "User location updated: lat=" + point.lat + ", long=" + point.log);
    }
 
    static boolean getSubscribed() {
