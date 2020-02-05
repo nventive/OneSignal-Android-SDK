@@ -41,6 +41,7 @@ import android.database.sqlite.SQLiteDatabase;
 import android.location.Location;
 import android.net.ConnectivityManager;
 import android.os.Bundle;
+import android.util.Log;
 
 import com.onesignal.BuildConfig;
 import com.onesignal.OSEmailSubscriptionObserver;
@@ -79,6 +80,7 @@ import com.onesignal.StaticResetHelper;
 import com.onesignal.SyncJobService;
 import com.onesignal.SyncService;
 import com.onesignal.example.BlankActivity;
+import com.onesignal.OneSignal.ChangeTagsUpdateHandler;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -876,6 +878,10 @@ public class MainOneSignalClassRunner {
       assertEquals("value1.5", sentTags.getString("test1"));
       assertFalse(sentTags.has(("test2")));
       assertEquals("value3", sentTags.getString("test3"));
+
+      // Test empty JSONObject
+      OneSignal.sendTags(new JSONObject());
+      OneSignal.sendTags(new JSONObject(), null);
    }
 
    @Test
@@ -1260,6 +1266,86 @@ public class MainOneSignalClassRunner {
 
       assertEquals(2, ShadowOneSignalRestClient.networkCallCount);
       assertNotNull(callBackUseId);
+   }
+
+   private class TestChangeTagsUpdateHandler implements ChangeTagsUpdateHandler {
+      private AtomicBoolean succeeded = new AtomicBoolean(false);
+      private AtomicBoolean failed = new AtomicBoolean(false);
+
+      @Override
+      public void onSuccess(JSONObject tags) {
+         succeeded.set(true);
+      }
+
+      @Override
+      public void onFailure(OneSignal.SendTagsError error) {
+         failed.set(true);
+      }
+
+      boolean getSucceeded() {
+         return succeeded.get();
+      }
+
+      boolean getFailed() {
+         return failed.get();
+      }
+   }
+
+   // Tests to make sure the onSuccess handler works
+   @Test
+   public void shouldSendNewTagsWithResponse() throws Exception {
+      OneSignalInit();
+      threadAndTaskWait();
+
+      TestChangeTagsUpdateHandler handler = new TestChangeTagsUpdateHandler();
+
+      OneSignal.sendTags(new JSONObject("{\"test\" : \"value\"}"), handler);
+
+      threadAndTaskWait();
+
+      assertTrue(handler.getSucceeded());
+
+      // now test to make sure the handler still fires for a call to
+      // sendTags() that doesn't modify existing tags (no JSON delta)
+
+      handler = new TestChangeTagsUpdateHandler();
+
+      OneSignal.sendTags(new JSONObject("{\"test\" : \"value\"}"), handler);
+
+      threadAndTaskWait();
+
+      assertTrue(handler.getSucceeded());
+   }
+
+   // Tests to make sure that the onFailure callback works
+   @Test
+   public void shouldFailToSendTagsWithResponse() throws Exception {
+      TestChangeTagsUpdateHandler handler = new TestChangeTagsUpdateHandler();
+
+      // should fail because there is no OneSignal player ID
+      OneSignal.sendTags(new JSONObject("{\"test\" : \"value\"}"), handler);
+
+      threadAndTaskWait();
+
+      assertTrue(handler.getFailed());
+   }
+
+   // Tests to make sure that the SDK will call both handlers
+   @Test
+   public void shouldCallMultipleHandlers() throws Exception {
+      OneSignalInit();
+      threadAndTaskWait();
+
+      TestChangeTagsUpdateHandler firstHandler = new TestChangeTagsUpdateHandler();
+      TestChangeTagsUpdateHandler secondHandler = new TestChangeTagsUpdateHandler();
+
+      OneSignal.sendTags(new JSONObject("{\"test1\" : \"value1\"}"), firstHandler);
+      OneSignal.sendTags(new JSONObject("{\"test2\" : \"value2\"}"), secondHandler);
+
+      threadAndTaskWait();
+
+      assertTrue(firstHandler.getSucceeded());
+      assertTrue(secondHandler.getSucceeded());
    }
 
    @Test
@@ -2237,6 +2323,112 @@ public class MainOneSignalClassRunner {
       postNotificationSuccess = postNotificationFailure = null;
    }
 
+   @Test
+   public void shouldReturnCorrectConsentRequiredStatus() throws Exception {
+      OneSignal.setRequiresUserPrivacyConsent(true);
+
+      OneSignalInit();
+
+      assertTrue(OneSignal.requiresUserPrivacyConsent());
+
+      OneSignal.provideUserConsent(true);
+
+      assertFalse(OneSignal.requiresUserPrivacyConsent());
+   }
+
+   @Test
+   public void shouldReturnCorrectConsentRequiredStatusWhenSetBeforeInit() throws Exception {
+      OneSignal.setRequiresUserPrivacyConsent(true);
+      OneSignal.provideUserConsent(true);
+      OneSignalInit();
+      threadAndTaskWait();
+
+      assertTrue(OneSignal.userProvidedPrivacyConsent());
+
+      fastAppRestart();
+      OneSignalInit();
+      threadAndTaskWait();
+
+      assertTrue(OneSignal.userProvidedPrivacyConsent());
+   }
+
+
+   // Functions to add observers (like addSubscriptionObserver) should continue
+   // to work even if privacy consent has not been granted.
+   @Test
+   public void shouldAddSubscriptionObserverIfConsentNotGranted() throws Exception {
+      OneSignal.setRequiresUserPrivacyConsent(true);
+      OneSignalInit();
+      threadAndTaskWait();
+
+      OSSubscriptionObserver subscriptionObserver = new OSSubscriptionObserver() {
+         @Override
+         public void onOSSubscriptionChanged(OSSubscriptionStateChanges stateChanges) {
+            lastSubscriptionStateChanges = stateChanges;
+            currentSubscription = stateChanges.getTo().getSubscribed();
+         }
+      };
+      OneSignal.addSubscriptionObserver(subscriptionObserver);
+      lastSubscriptionStateChanges = null;
+      // Make sure garbage collection doesn't nuke any observers.
+      Runtime.getRuntime().gc();
+
+      OneSignal.provideUserConsent(true);
+      threadAndTaskWait();
+
+      // make sure the subscription observer was fired
+      assertTrue(lastSubscriptionStateChanges.getTo().getSubscribed());
+      assertFalse(lastSubscriptionStateChanges.getFrom().getSubscribed());
+   }
+
+   @Test
+   public void shouldAddPermissionObserverIfConsentNotGranted() throws Exception {
+      OneSignal.setRequiresUserPrivacyConsent(true);
+      OneSignalInit();
+      threadAndTaskWait();
+
+      OSPermissionObserver permissionObserver = new OSPermissionObserver() {
+         @Override
+         public void onOSPermissionChanged(OSPermissionStateChanges stateChanges) {
+            lastPermissionStateChanges = stateChanges;
+            currentPermission = stateChanges.getTo().getEnabled();
+         }
+      };
+      OneSignal.addPermissionObserver(permissionObserver);
+
+      OneSignal.provideUserConsent(true);
+      threadAndTaskWait();
+
+      // make sure the permission observer was fired
+      assertFalse(lastPermissionStateChanges.getFrom().getEnabled());
+      assertTrue(lastPermissionStateChanges.getTo().getEnabled());
+   }
+
+   @Test
+   public void shouldAddEmailSubscriptionObserverIfConsentNotGranted() throws Exception {
+      OneSignal.setRequiresUserPrivacyConsent(true);
+      OneSignalInit();
+      OSEmailSubscriptionObserver subscriptionObserver = new OSEmailSubscriptionObserver() {
+         @Override
+         public void onOSEmailSubscriptionChanged(OSEmailSubscriptionStateChanges stateChanges) {
+            lastEmailSubscriptionStateChanges = stateChanges;
+         }
+      };
+      OneSignal.addEmailSubscriptionObserver(subscriptionObserver);
+
+      OneSignal.provideUserConsent(true);
+      threadAndTaskWait();
+
+      OneSignal.setEmail("josh@onesignal.com");
+      threadAndTaskWait();
+
+      // make sure the email subscription observer was fired
+      assertNull(lastEmailSubscriptionStateChanges.getFrom().getEmailUserId());
+      assertEquals("b007f967-98cc-11e4-bed1-118f05be4522", lastEmailSubscriptionStateChanges.getTo().getEmailUserId());
+      assertEquals("josh@onesignal.com", lastEmailSubscriptionStateChanges.getTo().getEmailAddress());
+      assertTrue(lastEmailSubscriptionStateChanges.getTo().getSubscribed());
+   }
+
    /*
    // Can't get test to work from a app flow due to the main thread being locked one way or another in a robolectric env.
    // Running ActivityLifecycleListener.focusHandlerThread...advanceToNextPostedRunnable waits on the main thread.
@@ -2740,7 +2932,7 @@ public class MainOneSignalClassRunner {
    public void shouldClearBadgesWhenPermissionIsDisabled() throws Exception {
       OneSignalInit();
       threadAndTaskWait();
-      ShadowBadgeCountUpdater.updateCount(1, blankActivity);
+      ShadowBadgeCountUpdater.lastCount = 1;
    
       blankActivityController.pause();
       threadAndTaskWait();
@@ -3042,6 +3234,138 @@ public class MainOneSignalClassRunner {
       ShadowFirebaseAnalytics.lastEventString = null;
       OneSignal.init(blankActivity, "123456789", ONESIGNAL_APP_ID, getNotificationOpenedHandler());
       assertNull(ShadowFirebaseAnalytics.lastEventString);
+   }
+
+   @Test
+   public void shouldSendExternalUserIdAfterRegistration() throws Exception {
+      OneSignalInit();
+      threadAndTaskWait();
+
+      String testExternalId = "test_ext_id";
+
+      OneSignal.setExternalUserId(testExternalId);
+
+      threadAndTaskWait();
+
+      assertEquals(3, ShadowOneSignalRestClient.networkCallCount);
+
+      ShadowOneSignalRestClient.Request externalIdRequest = ShadowOneSignalRestClient.requests.get(2);
+      assertEquals(ShadowOneSignalRestClient.REST_METHOD.PUT, externalIdRequest.method);
+      assertEquals(testExternalId, externalIdRequest.payload.getString("external_user_id"));
+   }
+
+   @Test
+   public void shouldSendExternalUserIdBeforeRegistration() throws Exception {
+      String testExternalId = "test_ext_id";
+
+      OneSignal.setExternalUserId(testExternalId);
+
+      OneSignalInit();
+      threadAndTaskWait();
+
+      assertEquals(2, ShadowOneSignalRestClient.networkCallCount);
+
+      ShadowOneSignalRestClient.Request registrationRequest = ShadowOneSignalRestClient.requests.get(1);
+      assertEquals(ShadowOneSignalRestClient.REST_METHOD.POST, registrationRequest.method);
+      assertEquals(testExternalId, registrationRequest.payload.getString("external_user_id"));
+   }
+
+   @Test
+   public void shouldRemoveExternalUserId() throws Exception {
+      OneSignal.setExternalUserId("test_ext_id");
+
+      OneSignalInit();
+      threadAndTaskWait();
+
+      OneSignal.removeExternalUserId();
+      threadAndTaskWait();
+
+      assertEquals(3, ShadowOneSignalRestClient.networkCallCount);
+
+      ShadowOneSignalRestClient.Request removeIdRequest = ShadowOneSignalRestClient.requests.get(2);
+      assertEquals(ShadowOneSignalRestClient.REST_METHOD.PUT, removeIdRequest.method);
+      assertEquals(removeIdRequest.payload.getString("external_user_id"), "");
+   }
+
+   @Test
+   public void doesNotSendSameExternalId() throws Exception {
+      String testExternalId = "test_ext_id";
+
+      OneSignal.setExternalUserId(testExternalId);
+
+      OneSignalInit();
+      threadAndTaskWait();
+
+      assertEquals(2, ShadowOneSignalRestClient.networkCallCount);
+
+      OneSignal.setExternalUserId(testExternalId);
+      threadAndTaskWait();
+
+      // Setting the same ID again should not generate a duplicate API request
+      // The SDK should detect it is the same and not generate a request
+      assertEquals(2, ShadowOneSignalRestClient.networkCallCount);
+   }
+
+   @Test
+   public void sendsExternalIdOnEmailPlayers() throws Exception {
+      String testExternalId = "test_ext_id";
+
+      OneSignalInit();
+      threadAndTaskWait();
+
+      OneSignal.setEmail("brad@onesignal.com");
+      threadAndTaskWait();
+
+      int currentRequestCount = ShadowOneSignalRestClient.networkCallCount;
+
+      OneSignal.setExternalUserId(testExternalId);
+      threadAndTaskWait();
+
+      // the SDK should have made two additional API calls
+      // One to set extID on the push player record,
+      // and another for the email player record
+      assertEquals(ShadowOneSignalRestClient.networkCallCount, currentRequestCount + 2);
+
+      int externalIdRequests = 0;
+
+      for (ShadowOneSignalRestClient.Request request : ShadowOneSignalRestClient.requests) {
+         if (request.payload != null && request.payload.has("external_user_id")) {
+            externalIdRequests += 1;
+            assertEquals(request.payload.getString("external_user_id"), testExternalId);
+         }
+      }
+
+      assertEquals(externalIdRequests, 2);
+   }
+
+   @Test
+   public void testGetTagsQueuesCallbacks() throws Exception {
+
+      // Allows us to validate that both handlers get executed independently
+      class DebugGetTagsHandler implements OneSignal.GetTagsHandler {
+         boolean executed = false;
+
+         @Override
+         public void tagsAvailable(JSONObject tags) {
+            executed = true;
+         }
+      }
+
+      OneSignalInit();
+      threadAndTaskWait();
+
+      OneSignal.sendTag("test", "value");
+      threadAndTaskWait();
+
+      DebugGetTagsHandler first = new DebugGetTagsHandler();
+      DebugGetTagsHandler second = new DebugGetTagsHandler();
+
+      OneSignal.getTags(first);
+      OneSignal.getTags(second);
+      threadAndTaskWait();
+
+      assertTrue(first.executed);
+      assertTrue(second.executed);
    }
 
    // ####### Unit test helper methods ########

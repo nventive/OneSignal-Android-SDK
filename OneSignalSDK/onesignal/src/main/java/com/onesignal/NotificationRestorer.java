@@ -51,8 +51,11 @@ import java.util.ArrayList;
 // Restore any notifications not interacted by the user back into the notification shade.
 // We consider "not interacted" with if it wasn't swiped away or opened by the user.
 // Android removes all the app's notifications in the following three cases.
-//   1. App was force stopped (AKA forced killed). Different than the app being swiped away.
+//   1. App was force stopped. (AKA force killed)
+//      - Swiped away is a normal close.
 //   2. App is updated.
+//      - From the Play Store or with adb install.
+//      - Also happens each time you run the app from Android Studio.
 //   3. Device is rebooted.
 // Restoring is done to ensure notifications are not missed by the user.
 //
@@ -64,6 +67,7 @@ import java.util.ArrayList;
 //                   The channel has a low priority so the user is not interrupted again.
 // Android 6+ Marshmallow - We check the notification shade if the notification is already there
 //                            we skip generating it again.
+// Up to the most recent 50 notifications will be restored.
 
 class NotificationRestorer {
 
@@ -74,8 +78,14 @@ class NotificationRestorer {
        NotificationTable.COLUMN_NAME_FULL_DATA,
        NotificationTable.COLUMN_NAME_CREATED_TIME
    };
-   
-   // Notifications will never be force removed when the app's process is running.
+
+   // Delay to prevent logcat messages and possibly skipping some notifications
+   //    This prevents the following error;
+   // E/NotificationService: Package enqueue rate is 10.56985. Shedding events. package=####
+   private static final int DELAY_BETWEEN_NOTIFICATION_RESTORES_MS = 200;
+
+   // Notifications will never be force removed when the app's process is running,
+   //   so we only need to restore at most once per cold start of the app.
    public static boolean restored;
 
    static void asyncRestore(final Context context) {
@@ -90,20 +100,30 @@ class NotificationRestorer {
 
    @WorkerThread
    public static void restore(Context context) {
+      if (!OSUtils.areNotificationsEnabled(context))
+         return;
+
       if (restored)
          return;
       restored = true;
 
-      OneSignal.Log(OneSignal.LOG_LEVEL.INFO, "restoring notifications");
+      OneSignal.Log(OneSignal.LOG_LEVEL.INFO, "Restoring notifications");
 
       OneSignalDbHelper dbHelper = OneSignalDbHelper.getInstance(context);
+      deleteOldNotificationsFromDb(dbHelper);
+
+      StringBuilder dbQuerySelection = NotificationTable.recentUninteractedWithNotificationsWhere();
+      skipVisibleNotifications(context, dbQuerySelection);
+
+      queryAndRestoreNotificationsAndBadgeCount(context, dbHelper, dbQuerySelection);
+   }
+
+   private static void deleteOldNotificationsFromDb(OneSignalDbHelper dbHelper) {
       SQLiteDatabase writableDb = null;
-      
+
       try {
          writableDb = dbHelper.getWritableDbWithRetries();
-         
          writableDb.beginTransaction();
-         
          NotificationBundleProcessor.deleteOldNotifications(writableDb);
          writableDb.setTransactionSuccessful();
       } catch (Throwable t) {
@@ -117,35 +137,30 @@ class NotificationRestorer {
             }
          }
       }
+   }
 
-      long created_at_cutoff = (System.currentTimeMillis() / 1_000L) - 604_800L; // 1 Week back
-      StringBuilder dbQuerySelection = new StringBuilder(
-        NotificationTable.COLUMN_NAME_CREATED_TIME + " > " + created_at_cutoff + " AND " +
-        NotificationTable.COLUMN_NAME_DISMISSED + " = 0 AND " +
-        NotificationTable.COLUMN_NAME_OPENED + " = 0 AND " +
-        NotificationTable.COLUMN_NAME_IS_SUMMARY + " = 0"
-      );
-
-      skipVisibleNotifications(context, dbQuerySelection);
-
+   private static void queryAndRestoreNotificationsAndBadgeCount(
+      Context context,
+      OneSignalDbHelper dbHelper,
+      StringBuilder dbQuerySelection) {
       OneSignal.Log(OneSignal.LOG_LEVEL.INFO,
-              "Querying DB for notfs to restore: " + dbQuerySelection.toString());
+         "Querying DB for notifs to restore: " + dbQuerySelection.toString());
 
       Cursor cursor = null;
       try {
          SQLiteDatabase readableDb = dbHelper.getReadableDbWithRetries();
          cursor = readableDb.query(
-             NotificationTable.TABLE_NAME,
-             COLUMNS_FOR_RESTORE,
-             dbQuerySelection.toString(),
+            NotificationTable.TABLE_NAME,
+            COLUMNS_FOR_RESTORE,
+            dbQuerySelection.toString(),
             null,
-            null,                           // group by
-            null,                            // filter by row groups
-            NotificationTable._ID + " ASC"  // sort order, old to new
+            null, // group by
+            null, // filter by row groups
+            NotificationTable._ID + " DESC", // sort order, new to old
+            NotificationLimitManager.MAX_NUMBER_OF_NOTIFICATIONS_STR // limit
          );
-   
-         showNotifications(context, cursor, 100);
-         
+         showNotificationsFromCursor(context, cursor, DELAY_BETWEEN_NOTIFICATION_RESTORES_MS);
+         BadgeCountUpdater.update(readableDb, context);
       } catch (Throwable t) {
          OneSignal.Log(OneSignal.LOG_LEVEL.ERROR, "Error restoring notification records! ", t);
       } finally {
@@ -164,8 +179,6 @@ class NotificationRestorer {
          return;
 
       NotificationManager notifManager = (NotificationManager)context.getSystemService(Context.NOTIFICATION_SERVICE);
-      if (notifManager == null)
-         return;
 
       try {
          StatusBarNotification[] activeNotifs = notifManager.getActiveNotifications();
@@ -194,7 +207,7 @@ class NotificationRestorer {
     * @param cursor - Source cursor to generate notifications from
     * @param delay - Delay to slow down process to ensure we don't spike CPU and I/O on the device.
     */
-   static void showNotifications(Context context, Cursor cursor, int delay) {
+   static void showNotificationsFromCursor(Context context, Cursor cursor, int delay) {
       if (!cursor.moveToFirst())
          return;
 
@@ -207,12 +220,13 @@ class NotificationRestorer {
             NotificationExtenderService.enqueueWork(context,
                   intent.getComponent(),
                   NotificationExtenderService.EXTENDER_SERVICE_JOB_ID,
-                  intent);
+                  intent,
+                  false);
          }
          else {
             Intent intent = addRestoreExtras(new Intent(), cursor);
             ComponentName componentName = new ComponentName(context, RestoreJobService.class);
-            RestoreJobService.enqueueWork(context, componentName, RestoreJobService.RESTORE_SERVICE_JOB_ID, intent);
+            RestoreJobService.enqueueWork(context, componentName, RestoreJobService.RESTORE_SERVICE_JOB_ID, intent, false);
          }
 
          if (delay > 0)
